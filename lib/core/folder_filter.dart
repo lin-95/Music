@@ -60,6 +60,53 @@ class FolderFilter {
     }).toList();
   }
 
+  /// 按父目录把歌曲分组。
+  ///
+  /// - 分组键为 [parentFolderOf] 的规范化结果，无父目录的歌曲归入空串分组；
+  /// - 显示名取末级目录，末级为 `0`（顶层存储目录）时保留完整路径，
+  ///   无父目录的歌曲显示为「其他」；
+  /// - 排序：有父目录的按显示名升序，「其他」分组永远排在最后。
+  static List<({String folder, String displayName, List<Song> songs})>
+      groupByFolder(List<Song> songs) {
+    final groups = <String, List<Song>>{};
+    final names = <String, String>{};
+    for (final song in songs) {
+      final parent = parentFolderOf(song.hash) ?? '';
+      (groups[parent] ??= <Song>[]).add(song);
+      names.putIfAbsent(
+        parent,
+        () => parent.isEmpty ? '其他' : folderDisplayName(parent),
+      );
+    }
+    final result = groups.entries
+        .map(
+          (entry) => (
+            folder: entry.key,
+            displayName: names[entry.key]!,
+            songs: entry.value,
+          ),
+        )
+        .toList()
+      ..sort((a, b) {
+        if (a.folder.isEmpty) return 1;
+        if (b.folder.isEmpty) return -1;
+        final byName = a.displayName.compareTo(b.displayName);
+        return byName != 0 ? byName : a.folder.compareTo(b.folder);
+      });
+    return result;
+  }
+
+  /// 取文件夹显示名：优先末级目录名，顶层存储目录（末级为 `0`）显示完整路径。
+  static String folderDisplayName(String folder) {
+    final separator = folder.contains(r'\') ? r'\' : '/';
+    final segments =
+        folder.split(separator).where((s) => s.isNotEmpty).toList();
+    if (segments.isEmpty) return folder;
+    final last = segments.last;
+    if (last == '0' || last == 'storage') return folder;
+    return last;
+  }
+
   /// 统计各父文件夹下的歌曲数量（按数量降序，供排除设置界面展示）。
   static List<({String folder, int count})> folderCounts(List<Song> songs) {
     final counts = <String, int>{};
