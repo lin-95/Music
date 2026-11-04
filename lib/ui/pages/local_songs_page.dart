@@ -32,6 +32,12 @@ class _LocalSongsPageState extends State<LocalSongsPage> {
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
 
+  /// 是否按文件夹分组展示（false = 平铺列表）。
+  bool _grouped = false;
+
+  /// 已折叠的分组（key 为规范化后的父目录，'' 表示"其他"）。
+  final Set<String> _collapsedFolders = <String>{};
+
   @override
   void initState() {
     super.initState();
@@ -240,6 +246,19 @@ class _LocalSongsPageState extends State<LocalSongsPage> {
               return Row(
                 children: [
                   IconButton(
+                    tooltip: _grouped ? '切换为列表' : '按文件夹分组',
+                    onPressed: () {
+                      setState(() {
+                        _grouped = !_grouped;
+                      });
+                    },
+                    icon: Icon(
+                      _grouped
+                          ? Icons.view_list_rounded
+                          : Icons.folder_rounded,
+                    ),
+                  ),
+                  IconButton(
                     tooltip: '扫描目录设置',
                     onPressed: _showFolderFilterSheet,
                     icon: const Icon(Icons.rule_folder_rounded),
@@ -373,63 +392,9 @@ class _LocalSongsPageState extends State<LocalSongsPage> {
                               title: allSongs.isEmpty ? '未找到本地音乐' : '没有检索到匹配的歌曲',
                               subtitle: allSongs.isEmpty ? '设备上没有可播放的音频文件' : '尝试其他关键词搜索',
                             )
-                          : ListView.builder(
-                              padding: const EdgeInsets.only(bottom: 120),
-                              itemCount: filteredSongs.length,
-                              itemBuilder: (context, index) {
-                                final song = filteredSongs[index];
-                                final isCurrent = widget.player.currentSong?.hash == song.hash;
-                                final isPlaying = isCurrent && widget.player.isPlaying;
-
-                                return ListTile(
-                                  key: ValueKey(song.id),
-                                  leading: SizedBox(
-                                    width: 44,
-                                    height: 44,
-                                    child: Stack(
-                                      children: [
-                                        Artwork(url: song.coverUrl, size: 44),
-                                        if (isCurrent)
-                                          Container(
-                                            decoration: BoxDecoration(
-                                              color: Colors.black.withValues(alpha: 0.4),
-                                              borderRadius: BorderRadius.circular(AppRadius.sm),
-                                            ),
-                                            child: Center(
-                                              child: NowPlayingBadge(
-                                                active: true,
-                                                playing: isPlaying,
-                                                color: Colors.white,
-                                                size: 16,
-                                              ),
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  ),
-                                  title: Text(
-                                    song.title,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-                                      color: isCurrent ? colorScheme.primary : colorScheme.onSurface,
-                                    ),
-                                  ),
-                                  subtitle: Text(
-                                    song.artist,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: isCurrent ? colorScheme.primary.withValues(alpha: .7) : colorScheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                  onTap: () {
-                                    widget.player.playSong(song, queue: filteredSongs);
-                                  },
-                                );
-                              },
-                            ),
+                          : (_grouped
+                              ? _buildGroupedList(context, colorScheme, filteredSongs)
+                              : _buildFlatList(context, colorScheme, filteredSongs)),
                 ),
               ],
             );
@@ -451,6 +416,167 @@ class _LocalSongsPageState extends State<LocalSongsPage> {
       extendBody: true,
       ),
       ),
+    );
+  }
+
+  /// 平铺列表（原有行为，保持不变）。
+  Widget _buildFlatList(
+    BuildContext context,
+    ColorScheme colorScheme,
+    List<dynamic> filteredSongs,
+  ) {
+    return ListView.builder(
+      padding: const EdgeInsets.only(bottom: 120),
+      itemCount: filteredSongs.length,
+      itemBuilder: (context, index) {
+        return _buildSongTile(context, colorScheme, filteredSongs[index], filteredSongs);
+      },
+    );
+  }
+
+  /// 按文件夹分组的列表（新增行为）。
+  ///
+  /// 分组键取自 [song.hash] 的父目录；若该字段并非文件路径（例如内容哈希），
+  /// 则 [_parentFolderOf] 返回 null，全部分组归入"其他"，退化为单组，不会崩溃。
+  Widget _buildGroupedList(
+    BuildContext context,
+    ColorScheme colorScheme,
+    List<dynamic> filteredSongs,
+  ) {
+    final groups = _groupByFolder(filteredSongs);
+    return ListView.builder(
+      padding: const EdgeInsets.only(bottom: 120),
+      itemCount: groups.length,
+      itemBuilder: (context, index) {
+        final group = groups[index];
+        final folder = group.folder as String;
+        final isCollapsed = _collapsedFolders.contains(folder);
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: LiquidGlassCard(
+                borderRadius: AppRadius.md,
+                padding: EdgeInsets.zero,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                  onTap: () {
+                    setState(() {
+                      if (isCollapsed) {
+                        _collapsedFolders.remove(folder);
+                      } else {
+                        _collapsedFolders.add(folder);
+                      }
+                    });
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    child: Row(
+                      children: [
+                        Icon(
+                          isCollapsed ? Icons.folder_rounded : Icons.folder_open_rounded,
+                          color: colorScheme.primary,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            group.displayName as String,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          '${(group.songs as List).length} 首',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Icon(
+                          isCollapsed ? Icons.expand_more_rounded : Icons.expand_less_rounded,
+                          color: colorScheme.onSurfaceVariant,
+                          size: 18,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            if (!isCollapsed)
+              ...(group.songs as List).map((song) {
+                return _buildSongTile(context, colorScheme, song, filteredSongs);
+              }),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 单曲行（平铺与分组共用，行为一致）。
+  Widget _buildSongTile(
+    BuildContext context,
+    ColorScheme colorScheme,
+    dynamic song,
+    List<dynamic> queue,
+  ) {
+    final isCurrent = widget.player.currentSong?.hash == song.hash;
+    final isPlaying = isCurrent && widget.player.isPlaying;
+
+    return ListTile(
+      key: ValueKey(song.id),
+      leading: SizedBox(
+        width: 44,
+        height: 44,
+        child: Stack(
+          children: [
+            Artwork(url: song.coverUrl, size: 44),
+            if (isCurrent)
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.4),
+                  borderRadius: BorderRadius.circular(AppRadius.sm),
+                ),
+                child: Center(
+                  child: NowPlayingBadge(
+                    active: true,
+                    playing: isPlaying,
+                    color: Colors.white,
+                    size: 16,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+      title: Text(
+        song.title,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+          color: isCurrent ? colorScheme.primary : colorScheme.onSurface,
+        ),
+      ),
+      subtitle: Text(
+        song.artist,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: isCurrent ? colorScheme.primary.withValues(alpha: .7) : colorScheme.onSurfaceVariant,
+        ),
+      ),
+      onTap: () {
+        widget.player.playSong(song, queue: queue);
+      },
     );
   }
 
@@ -497,6 +623,62 @@ class _LocalSongsPageState extends State<LocalSongsPage> {
       ),
     );
   }
+}
+
+/// ==== 分组纯函数（与 HTML 演示页逻辑一一对应）====
+
+/// 规范化文件夹路径：统一分隔符、去尾斜杠、转小写；空/根路径返回 null。
+String? _normalizeFolderPath(String? p) {
+  if (p == null) return null;
+  var n = p.trim().replaceAll('\\', '/');
+  while (n.endsWith('/') && n.length > 1) {
+    n = n.substring(0, n.length - 1);
+  }
+  if (n.isEmpty || n == '/') return null;
+  return n.toLowerCase();
+}
+
+/// 取文件的父目录（规范化后）；无父目录返回 null。
+String? _parentFolderOf(String? filePath) {
+  if (filePath == null) return null;
+  final n = filePath.trim().replaceAll('\\', '/');
+  final i = n.lastIndexOf('/');
+  if (i <= 0) return null;
+  return _normalizeFolderPath(n.substring(0, i));
+}
+
+/// 取末级目录名；顶层存储目录（末级为 `0`）返回完整路径。
+String _lastSegment(String folder) {
+  final segs = folder.split('/').where((s) => s.isNotEmpty).toList();
+  if (segs.isEmpty) return folder;
+  if (segs.length == 1) return segs[0];
+  return segs.last == '0' ? folder : segs.last;
+}
+
+/// 按父目录聚合歌曲，返回排序后的分组列表。
+List<Map<String, dynamic>> _groupByFolder(List<dynamic> songs) {
+  final groups = <String, List<dynamic>>{};
+  final names = <String, String>{};
+  for (final s in songs) {
+    final parent = _parentFolderOf(s.hash as String?) ?? '';
+    groups.putIfAbsent(parent, () => <dynamic>[]).add(s);
+    names.putIfAbsent(parent, () => parent.isEmpty ? '其他' : _lastSegment(parent));
+  }
+  final arr = groups.entries
+      .map((e) => <String, dynamic>{
+            'folder': e.key,
+            'displayName': names[e.key]!,
+            'songs': e.value,
+          })
+      .toList();
+  arr.sort((a, b) {
+    final af = a['folder'] as String;
+    final bf = b['folder'] as String;
+    if (af.isEmpty) return 1;
+    if (bf.isEmpty) return -1;
+    return (a['displayName'] as String).compareTo(b['displayName'] as String);
+  });
+  return arr;
 }
 
 /// 取文件夹显示名：优先末级目录名，顶层存储目录（末级为 `0`）显示完整路径。
