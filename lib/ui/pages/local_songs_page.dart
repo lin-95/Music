@@ -423,7 +423,7 @@ class _LocalSongsPageState extends State<LocalSongsPage> {
   Widget _buildFlatList(
     BuildContext context,
     ColorScheme colorScheme,
-    List<dynamic> filteredSongs,
+    List<Song> filteredSongs,
   ) {
     return ListView.builder(
       padding: const EdgeInsets.only(bottom: 120),
@@ -441,7 +441,7 @@ class _LocalSongsPageState extends State<LocalSongsPage> {
   Widget _buildGroupedList(
     BuildContext context,
     ColorScheme colorScheme,
-    List<dynamic> filteredSongs,
+    List<Song> filteredSongs,
   ) {
     final groups = _groupByFolder(filteredSongs);
     return ListView.builder(
@@ -449,7 +449,7 @@ class _LocalSongsPageState extends State<LocalSongsPage> {
       itemCount: groups.length,
       itemBuilder: (context, index) {
         final group = groups[index];
-        final folder = group.folder as String;
+        final folder = group.folder;
         final isCollapsed = _collapsedFolders.contains(folder);
         return Column(
           mainAxisSize: MainAxisSize.min,
@@ -483,7 +483,7 @@ class _LocalSongsPageState extends State<LocalSongsPage> {
                         const SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            group.displayName as String,
+                            group.displayName,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
@@ -493,7 +493,7 @@ class _LocalSongsPageState extends State<LocalSongsPage> {
                           ),
                         ),
                         Text(
-                          '${(group.songs as List).length} 首',
+                          '${group.songs.length} 首',
                           style: TextStyle(
                             fontSize: 12,
                             color: colorScheme.onSurfaceVariant,
@@ -512,7 +512,7 @@ class _LocalSongsPageState extends State<LocalSongsPage> {
               ),
             ),
             if (!isCollapsed)
-              ...(group.songs as List).map((song) {
+              ...group.songs.map((song) {
                 return _buildSongTile(context, colorScheme, song, filteredSongs);
               }),
           ],
@@ -525,8 +525,8 @@ class _LocalSongsPageState extends State<LocalSongsPage> {
   Widget _buildSongTile(
     BuildContext context,
     ColorScheme colorScheme,
-    dynamic song,
-    List<dynamic> queue,
+    Song song,
+    List<Song> queue,
   ) {
     final isCurrent = widget.player.currentSong?.hash == song.hash;
     final isPlaying = isCurrent && widget.player.isPlaying;
@@ -625,6 +625,24 @@ class _LocalSongsPageState extends State<LocalSongsPage> {
   }
 }
 
+/// 分组结果：按父目录聚合后的一个文件夹分组。
+class FolderGroup {
+  const FolderGroup({
+    required this.folder,
+    required this.displayName,
+    required this.songs,
+  });
+
+  /// 规范化后的父目录路径，'' 表示"其他"。
+  final String folder;
+
+  /// 组头显示名（末级目录名，'0' 显示全路径，"其他"组为 '其他'）。
+  final String displayName;
+
+  /// 该组内的歌曲。
+  final List<Song> songs;
+}
+
 /// ==== 分组纯函数（与 HTML 演示页逻辑一一对应）====
 
 /// 规范化文件夹路径：统一分隔符、去尾斜杠、转小写；空/根路径返回 null。
@@ -639,9 +657,11 @@ String? _normalizeFolderPath(String? p) {
 }
 
 /// 取文件的父目录（规范化后）；无父目录返回 null。
-String? _parentFolderOf(String? filePath) {
+///
+/// 参数用 [Object?] 接收，兼容 `hash` 为 `String` 或 `String?` 的情形。
+String? _parentFolderOf(Object? filePath) {
   if (filePath == null) return null;
-  final n = filePath.trim().replaceAll('\\', '/');
+  final n = filePath.toString().trim().replaceAll('\\', '/');
   final i = n.lastIndexOf('/');
   if (i <= 0) return null;
   return _normalizeFolderPath(n.substring(0, i));
@@ -656,27 +676,25 @@ String _lastSegment(String folder) {
 }
 
 /// 按父目录聚合歌曲，返回排序后的分组列表。
-List<Map<String, dynamic>> _groupByFolder(List<dynamic> songs) {
-  final groups = <String, List<dynamic>>{};
+List<FolderGroup> _groupByFolder(List<Song> songs) {
+  final groups = <String, List<Song>>{};
   final names = <String, String>{};
   for (final s in songs) {
-    final parent = _parentFolderOf(s.hash as String?) ?? '';
-    groups.putIfAbsent(parent, () => <dynamic>[]).add(s);
+    final parent = _parentFolderOf(s.hash) ?? '';
+    groups.putIfAbsent(parent, () => <Song>[]).add(s);
     names.putIfAbsent(parent, () => parent.isEmpty ? '其他' : _lastSegment(parent));
   }
   final arr = groups.entries
-      .map((e) => <String, dynamic>{
-            'folder': e.key,
-            'displayName': names[e.key]!,
-            'songs': e.value,
-          })
+      .map((e) => FolderGroup(
+            folder: e.key,
+            displayName: names[e.key]!,
+            songs: e.value,
+          ))
       .toList();
   arr.sort((a, b) {
-    final af = a['folder'] as String;
-    final bf = b['folder'] as String;
-    if (af.isEmpty) return 1;
-    if (bf.isEmpty) return -1;
-    return (a['displayName'] as String).compareTo(b['displayName'] as String);
+    if (a.folder.isEmpty) return 1;
+    if (b.folder.isEmpty) return -1;
+    return a.displayName.compareTo(b.displayName);
   });
   return arr;
 }
